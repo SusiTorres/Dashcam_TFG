@@ -1,0 +1,207 @@
+#Autor: Lorena Suset Romero Torres
+#Fecha:04/07/2025
+#Proyecto:Dashcam(TFG)
+
+import cv2
+import os
+import time
+import threading
+import datetime
+import shutil
+import numpy as np
+import queue
+import logging
+from collections import deque
+from picamera2 import Picamera2
+from subprocess import run
+from smbus2 import SMBus  # Para comunicación I2C con GY-521
+
+# === CONFIGURACIÓN ===
+BUFFER_SEGUNDOS = 10
+DURACION_GRABACION = 50
+FPS = 20
+RESOLUCION = (640, 480)
+LOCAL_SAVE_DIR = "/home/Lo/YOLO/"
+NOMBRE_REMOTO_RCLONE = "gdrive"
+RUTA_EN_DRIVE = "YOLO/Videos"
+UMBRAL_ACEL = 0.5
+LOG_PATH = "/home/Lo/YOLO/dashcam.log"
+
+# === FUNCIÓN DE .LOG ===
+def log_evento(mensaje):
+    timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+    with open(LOG_PATH, "a") as f:
+        f.write(f"{timestamp} {mensaje}\n")
+
+# === CONFIGURACIÓN IMU ===
+MPU6050_ADDR = 0x68
+
+os.makedirs(LOCAL_SAVE_DIR, exist_ok=True)
+
+# === INICIALIZAR CÁMARA ===
+picam2 = Picamera2()
+picam2.preview_configuration.main.size = RESOLUCION
+picam2.preview_configuration.main.format = "RGB888"
+picam2.configure("preview")
+picam2.start()
+
+# === BUFFER DE FRAMES ===
+buffer = deque(maxlen=BUFFER_SEGUNDOS * FPS)
+cola_grabacion = queue.Queue()
+
+# === BANDERAS ===
+modo_grabacion = threading.Event()
+grabando = threading.Event()
+
+# === FUNCIONES AUXILIARES ===
+def timestamp_actual():
+    return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+def guardar_y_subir(buffer_inicial, cola_frames):
+    grabando.set()
+    filename = f"video_{timestamp_actual()}.mp4"
+    ruta_local = os.path.join(LOCAL_SAVE_DIR, filename)
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(ruta_local, fourcc, FPS, RESOLUCION)
+
+    print("Escribiendo buffer inicial...")
+    for frame in buffer_inicial:
+        out.write(frame)
+
+    print(f"Grabando {DURACION_GRABACION} segundos nuevos...")
+    inicio = time.time()
+    while time.time() - inicio < DURACION_GRABACION:
+        try:
+            frame = cola_frames.get(timeout=1)
+            out.write(frame)
+        except queue.Empty:
+            continue
+
+    out.release()
+    print(f"Guardado en: {ruta_local}")
+
+    print("Subiendo a Google Drive...")
+    run(["rclone", "copy", ruta_local, f"{NOMBRE_REMOTO_RCLONE}:{RUTA_EN_DRIVE}"])
+    print("Subido correctamente.")
+
+    limpiar_por_espacio(LOCAL_SAVE_DIR)
+    grabando.clear()
+
+def limpiar_por_espacio(directorio, uso_maximo=80, uso_objetivo=70):
+    total, usado, libre = shutil.disk_usage(directorio)
+    porcentaje_usado = (usado / total) * 100
+
+    if porcentaje_usado < uso_maximo:
+        return
+
+    print(f"Disco al {porcentaje_usado:.2f}%. Iniciando limpieza...")
+    archivos = sorted(
+        [os.path.join(directorio, f) for f in os.listdir(directorio)],
+        key=lambda f: os.path.getmtime(f)
+    )
+    for archivo in archivos:
+        try:
+            os.remove(archivo)
+            print(f"Eliminado: {archivo}")
+        except Exception as e:
+            print(f"Error al eliminar {archivo}: {e}")
+
+        total, usado, libre = shutil.disk_usage(directorio)
+        porcentaje_usado = (usado / total) * 100
+        if porcentaje_usado <= uso_objetivo:
+            print(f"Disco ahora al {porcentaje_usado:.2f}%")
+            break
+
+# === FUNCIONES DEL IMU ===
+def inicializar_mpu(bus):
+    bus.write_byte_data(MPU6050_ADDR, 0x6B, 0)
+
+def leer_word(bus, reg):
+    high = bus.read_byte_data(MPU6050_ADDR, reg)
+    low = bus.read_byte_data(MPU6050_ADDR, reg + 1)
+    valor = (high << 8) + low
+    if valor >= 0x8000:
+        valor = -((65535 - valor) + 1)
+    return valor
+
+def leer_aceleracion(bus):
+    ax = leer_word(bus, 0x3B) / 16384.0
+    ay = leer_word(bus, 0x3D) / 16384.0
+    az = leer_word(bus, 0x3F) / 16384.0
+    return (ax, ay, az)
+
+def detectar_evento(offset, lectura, umbral=UMBRAL_ACEL):
+    dx = abs(lectura[0] - offset[0])
+    dy = abs(lectura[1] - offset[1])
+    dz = abs(lectura[2] - offset[2])
+    return dx > umbral or dy > umbral or dz > umbral
+
+def escucha_imu():
+    print("Escuchando acelerómetro...")
+    logging.info("Iniciando escucha del IMU...")
+    sensor_detectado = False
+    with SMBus(1) as bus:
+        try:
+            inicializar_mpu(bus)
+            sensor_detectado = True
+            logging.info("Sensor IMU inicializado correctamente.")
+            print("Calibrando sensor, espera 5 segundos...")
+            time.sleep(5)
+            offset = leer_aceleracion(bus)
+            print(f"Offset base: {offset}")
+            logging.info(f"Offset de calibración: {offset}")
+        except OSError as e:
+            print(f"Error inicializando MPU6050: {e}. Se continuará grabando sin datos IMU.")
+            logging.error(f"Fallo al inicializar el sensor IMU: {e}")
+            offset = (0.0, 0.0, 0.0)  # Offset por defecto para continuar sin datos IMU
+
+        while True:
+            if sensor_detectado:
+                try:
+                    lectura = leer_aceleracion(bus)
+                    logging.debug(f"Lectura IMU: {lectura}")
+                    if detectar_evento(offset, lectura):
+                        print("Movimiento detectado por IMU")
+                        logging.info(f"Movimiento detectado: {lectura}")
+                        if not grabando.is_set():
+                            modo_grabacion.set()
+                        time.sleep(3)
+                except OSError as e:
+                    print(f"Error leyendo sensor IMU: {e}. Continuando sin datos IMU.")
+                    logging.warning(f"Error de lectura del IMU: {e}")
+            else:
+                time.sleep(1)
+            time.sleep(0.2)
+
+# === PROGRAMA PRINCIPAL ===
+def main():
+    threading.Thread(target=escucha_imu, daemon=True).start()
+    print("Dashcam activa. Grabando continuamente...")
+
+    while True:
+        frame = picam2.capture_array()
+        if frame is None:
+            continue
+
+        frame = cv2.resize(frame, RESOLUCION)
+        buffer.append(frame)
+
+        if grabando.is_set():
+            try:
+                cola_grabacion.put_nowait(frame)
+            except queue.Full:
+                pass
+
+        if modo_grabacion.is_set() and not grabando.is_set():
+            print("Activando grabación con buffer...")
+            buffer_copy = list(buffer)
+            modo_grabacion.clear()
+            threading.Thread(
+                target=guardar_y_subir,
+                args=(buffer_copy, cola_grabacion),
+                daemon=True
+            ).start()
+
+if __name__ == '__main__':
+    main()
