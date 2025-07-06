@@ -1,11 +1,17 @@
-#Autor: Lorena Suset Romero Torres
-#Fecha:04/07/2025
-#Proyecto:Dashcam(TFG)
+# Autor: Lorena Suset Romero Torres
+# Fecha: 04/07/2025
+# Proyecto: Dashcam (TFG)
 
-#Script que lee la aceleración y el giroscopio
+# -----------------------------------------------
+# Librerías necesarias
 from smbus2 import SMBus
 import time
 import csv
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# -----------------------------------------------
+# Constantes globales
 
 # Dirección I2C del MPU-6050
 MPU_ADDR = 0x68
@@ -14,6 +20,17 @@ MPU_ADDR = 0x68
 PWR_MGMT_1   = 0x6B
 ACCEL_XOUT_H = 0x3B
 GYRO_XOUT_H  = 0x43
+
+# Sensibilidades del sensor
+ACCEL_SENSITIVITY = 16384.0  # LSB/g para ±2g
+GYRO_SENSITIVITY  = 131.0    # LSB/(°/s) para ±250°/s
+
+# Archivo de datos
+CSV_FILE = "datos_frenado.csv"
+IMG_FILE = "figura_frenado.png"
+
+# -----------------------------------------------
+# Funciones de lectura del sensor
 
 def read_word(bus, reg):
     high = bus.read_byte_data(MPU_ADDR, reg)
@@ -24,19 +41,21 @@ def read_word(bus, reg):
     return value
 
 def get_accel(bus):
-    x = read_word(bus, ACCEL_XOUT_H) / 16384.0
-    y = read_word(bus, ACCEL_XOUT_H + 2) / 16384.0
-    z = read_word(bus, ACCEL_XOUT_H + 4) / 16384.0
+    x = read_word(bus, ACCEL_XOUT_H)     / ACCEL_SENSITIVITY
+    y = read_word(bus, ACCEL_XOUT_H + 2) / ACCEL_SENSITIVITY
+    z = read_word(bus, ACCEL_XOUT_H + 4) / ACCEL_SENSITIVITY
     return x, y, z
 
 def get_gyro(bus):
-    x = read_word(bus, GYRO_XOUT_H) / 131.0
-    y = read_word(bus, GYRO_XOUT_H + 2) / 131.0
-    z = read_word(bus, GYRO_XOUT_H + 4) / 131.0
+    x = read_word(bus, GYRO_XOUT_H)     / GYRO_SENSITIVITY
+    y = read_word(bus, GYRO_XOUT_H + 2) / GYRO_SENSITIVITY
+    z = read_word(bus, GYRO_XOUT_H + 4) / GYRO_SENSITIVITY
     return x, y, z
 
-# Inicializa sensor y archivo CSV
-with SMBus(1) as bus, open("datos_frenado.csv", "w", newline='') as file:
+# -----------------------------------------------
+# Adquisición de datos
+
+with SMBus(1) as bus, open(CSV_FILE, "w", newline='') as file:
     # Despertar el sensor
     bus.write_byte_data(MPU_ADDR, PWR_MGMT_1, 0)
 
@@ -57,15 +76,13 @@ with SMBus(1) as bus, open("datos_frenado.csv", "w", newline='') as file:
     except KeyboardInterrupt:
         print("Grabación finalizada.")
 
-###########################################################################################
-#Graficar 
-import pandas as pd
-import matplotlib.pyplot as plt
+# -----------------------------------------------
+# Graficar resultados
 
 # Carga de datos desde el archivo CSV
-data = pd.read_csv("datos_frenado.csv")
+data = pd.read_csv(CSV_FILE)
 
-# Opcional: centrar el tiempo en t=0 al inicio de la grabación
+# Opcional: centrar el tiempo en t = 0
 data["timestamp"] -= data["timestamp"].iloc[0]
 
 # Crear gráfico
@@ -82,5 +99,5 @@ plt.grid(True)
 plt.tight_layout()
 
 # Guardar imagen para insertar en el informe
-plt.savefig("figura_frenado.png")
+plt.savefig(IMG_FILE)
 plt.show()
