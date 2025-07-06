@@ -1,0 +1,76 @@
+#Autor: Lorena Suset Romero Torres
+#Fecha:04/07/2025
+#Proyecto:Dashcam(TFG)
+
+#IMPORTACIÓN DE LIBRERIAS
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
+import os
+
+#INSTALAR LA BIBLIOTECA
+!pip install ultralytics
+
+#VERIFICAR LA INSTALACION
+from ultralytics import YOLO
+
+#CARGAR DRIVE PARA PODER ACCEDER A LOS FICHEROS DE IMAGENES Y ETIQUETAS
+from google.colab import drive
+drive.mount('/content/gdrive')
+
+# Cargar un modelo preentrenado
+model = YOLO('yolov8m.pt')
+model.info()
+
+# Realizar detección en una imagen
+results = model.predict(source='ruta/xxx.jpg', conf=0.4, save=True)
+
+# MOSTRAR LOS RESULTADOS
+img_prueba = cv2.imread('ruta/xxx.jpg')
+plt.figure(figsize=(20, 20))
+plt.imshow(cv2.cvtColor(img_prueba, cv2.COLOR_BGR2RGB))
+plt.axis('off')
+plt.show()
+
+#Para Videos
+results = model.predict(source='ruta/xxx.mp4', conf=0.4, save=True)
+
+# Importar cv2_imshow
+from google.colab.patches import cv2_imshow
+
+# Ruta al video procesado
+video_path = 'ruta/xxx.avi'
+
+# Reproducir el video procesado
+cap = cv2.VideoCapture(video_path)
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+    cv2_imshow(frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):  # Presiona 'q' para salir
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
+#Citas y agradecimientos
+@software{yolov5,
+  title = {YOLOv5 by Ultralytics},
+  author = {Glenn Jocher},
+  year = {2020},
+  version = {7.0},
+  license = {AGPL-3.0},
+  url = {https://github.com/ultralytics/yolov5},
+  doi = {10.5281/zenodo.3908559},
+  orcid = {0000-0001-5950-6979}
+}
+@misc{lin2015microsoft,
+      title={Microsoft COCO},
+      author={Tsung-Yi Lin and Michael Maire and Serge Belongie and Lubomir Bourdev and Ross Girshick and James Hays and Pietro Perona and Deva Ramanan and C. Lawrence Zitnick and Piotr Dollár},
+      year={2015},
+      eprint={1405.0312},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
