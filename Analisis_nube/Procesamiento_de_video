@@ -1,0 +1,123 @@
+#Autor: Lorena Suset Romero Torres
+#Fecha:04/07/2025
+#Proyecto:Dashcam(TFG)
+
+!pip install ultralytics
+!pip install pytesseract
+
+#Librerias
+import os
+import time
+import shutil
+from ultralytics import YOLO
+import cv2
+import pytesseract
+from datetime import timedelta
+from IPython.display import display, Image
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Configuración de rutas en Drive
+RUTA_VIDEOS = 'ruta/Videos'
+RUTA_RESULTADOS = 'ruta/Resultados'
+os.makedirs(RUTA_RESULTADOS, exist_ok=True)
+
+#Ver archivos en la carpeta
+print(f"Archivos encontrados en {RUTA_VIDEOS}:")
+for archivo in os.listdir(RUTA_VIDEOS):
+    print(" -", archivo)
+
+# Cargar modelo YOLOv8m
+modelo_deteccion = YOLO('yolov8m.pt')
+modelo_matriculas = YOLO('/content/procesar_matriculas.pt')
+
+# Install tesseract
+!apt-get update
+!apt-get install tesseract-ocr
+!apt-get install libtesseract-dev
+
+# Configurar OCR
+import pytesseract
+pytesseract.pytesseract.tesseract_cmd = r"/usr/bin/tesseract"
+
+# Procesa un video si aún no existe su versión "_analizado"
+def analizar_nuevos_videos():
+    for archivo in os.listdir(RUTA_VIDEOS):
+        if archivo.lower().endswith(('.mp4', '.avi')) and '_analizado' not in archivo:
+            nombre_base  = os.path.splitext(archivo)[0]
+            ruta_video   = os.path.join(RUTA_VIDEOS, archivo)
+            salida_final = os.path.join(RUTA_RESULTADOS, f'{nombre_base}_analizado.mp4')
+            salida_txt   = os.path.join(RUTA_RESULTADOS, f'{nombre_base}_matriculas.txt')
+
+            print("Procesando archivo:", archivo)
+
+            if os.path.exists(salida_final):
+                continue
+
+            print(f'Analizando → {archivo}')
+
+            video_cap = cv2.VideoCapture(ruta_video)
+            fps       = video_cap.get(cv2.CAP_PROP_FPS)
+            ancho     = int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            alto      = int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            codec     = cv2.VideoWriter_fourcc(*'mp4v')
+            out_video = cv2.VideoWriter(salida_final, codec, fps, (ancho, alto))
+
+            frame_id      = 0
+            matriculas    = []
+
+            while True:
+                ret, frame = video_cap.read()
+                if not ret:
+                    break
+
+                frame_id += 1
+                timestamp = str(timedelta(seconds=frame_id / fps))
+
+                # Detección general con YOLOv8
+                detecciones = modelo_deteccion(frame)[0]
+
+                for det in detecciones.boxes:
+                    cls_id = int(det.cls[0])
+                    label  = modelo_deteccion.model.names[cls_id]
+                    x1, y1, x2, y2 = map(int, det.xyxy[0])
+
+                    # Dibujar todos los objetos
+                    color = (0, 255, 0) if cls_id != 2 else (255, 0, 0)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+                    # Solo si es coche
+                    if cls_id == 2:
+                        coche_roi = frame[y1:y2, x1:x2]
+                        det_mat = modelo_matriculas(coche_roi)[0]
+
+                        for mbox in det_mat.boxes:
+                            mx1, my1, mx2, my2 = map(int, mbox.xyxy[0])
+                            roi_matricula = coche_roi[my1:my2, mx1:mx2]
+
+                            texto = pytesseract.image_to_string(roi_matricula, config="--psm 7").strip()
+                            if texto:
+                                print(f"[{timestamp}] Matrícula detectada: {texto}")
+                                matriculas.append(f"{timestamp} - {texto}")
+                                # Dibujar sobre la matrícula en el frame
+                                cv2.putText(frame, texto, (x1, y1 - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+                out_video.write(frame)
+
+            video_cap.release()
+            out_video.release()
+
+            # Solo guardar txt si se detectaron matrículas
+            if matriculas:
+                with open(salida_txt, "w") as salida:
+                    for linea in matriculas:
+                        salida.write(linea + "\n")
+                print(f"Matrículas guardadas en: {salida_txt}")
+            else:
+                print("No se detectaron matrículas. No se generó archivo de texto.")
+
+            print(f'Vídeo anotado guardado en → {salida_final}')
+
+analizar_nuevos_videos()
