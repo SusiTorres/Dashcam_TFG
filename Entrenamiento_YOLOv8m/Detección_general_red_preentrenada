@@ -8,6 +8,12 @@ import matplotlib.pyplot as plt
 import cv2
 import os
 
+# CONSTANTES
+CONFIDENCE_THRESHOLD = 0.4
+IMAGE_PATH = 'ruta/xxx.jpg'
+VIDEO_INPUT_PATH = 'ruta/xxx.mp4'
+VIDEO_OUTPUT_PATH = 'ruta/xxx.avi'
+
 #INSTALAR LA BIBLIOTECA
 !pip install ultralytics
 
@@ -23,23 +29,23 @@ model = YOLO('yolov8m.pt')
 model.info()
 
 # Realizar detección en una imagen
-results = model.predict(source='ruta/xxx.jpg', conf=0.4, save=True)
+results = model.predict(source=IMAGE_PATH, conf=CONFIDENCE_THRESHOLD, save=True)
 
 # MOSTRAR LOS RESULTADOS
-img_prueba = cv2.imread('ruta/xxx.jpg')
+img_prueba = cv2.imread(IMAGE_PATH)
 plt.figure(figsize=(20, 20))
 plt.imshow(cv2.cvtColor(img_prueba, cv2.COLOR_BGR2RGB))
 plt.axis('off')
 plt.show()
 
 #Para Videos
-results = model.predict(source='ruta/xxx.mp4', conf=0.4, save=True)
+results = model.predict(source=VIDEO_INPUT_PATH, conf=CONFIDENCE_THRESHOLD, save=True)
 
 # Importar cv2_imshow
 from google.colab.patches import cv2_imshow
 
 # Ruta al video procesado
-video_path = 'ruta/xxx.avi'
+video_path = VIDEO_OUTPUT_PATH
 
 # Reproducir el video procesado
 cap = cv2.VideoCapture(video_path)
